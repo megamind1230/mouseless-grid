@@ -1,0 +1,112 @@
+* mouseless-grid — Implementation Plan
+
+  On-screen grid clicker for Linux. Type characters to select cells, click at that point.
+  Architecture follows jbensmann/mouseless (evdev + uinput), with X11 overlay via xgb.
+
+** Phase 1: Project Scaffolding
+  - [ ] =unimplemented, [X] = done, [-] = in progress
+
+  - [X] =1.1= Create directory structure
+    - [X] config/
+    - [X] keyboard/
+    - [X] mouse/
+    - [X] overlay/
+    - [X] grid/
+  - [X] =1.2= go mod init mouseless-grid
+  - [X] =1.3= Install Go dependencies
+    - [X] github.com/gvalkov/golang-evdev
+    - [X] github.com/bendahl/uinput (fork of jbensmann/uinput)
+    - [X] github.com/BurntSushi/xgb
+    - [X] github.com/sirupsen/logrus
+    - [X] gopkg.in/yaml.v2
+    - [ ] github.com/jessevdk/go-flags (will add in Phase 2)
+  - [X] =1.4= Create .org files (plan-todos, bugs, README, changelog)
+  - [X] =1.5= Create logs directory ~/magnus/mouseless-grid/logs/
+
+** Phase 2: Config System
+
+  - [X] =2.1= Define Config struct
+    - [X] mainKeys: []string (default: [j,k,l,u,i,o,m,,,.,'])
+    - [X] targetSubCellPx: int (default: 36)
+    - [X] bgColor: string (default: "#1a1a2e")
+    - [X] textColor: string (default: "#e0e0e0")
+    - [X] highlightColor: string (default: "#00d4ff")
+    - [X] opacity: float64 (default: 0.85)
+    - [X] logPath: string (default: ~/magnus/mouseless-grid/logs/)
+  - [X] =2.2= YAML loading with defaults
+  - [X] =2.3= CLI flags (--config, --debug, --list-devices)
+  - [X] =2.4= Generate default config.yaml on first run
+
+** Phase 3: Keyboard Input (from mouseless)
+
+  - [X] =3.1= Enumerate /dev/input/event* devices
+  - [X] =3.2= Filter keyboard devices (EV_KEY with KEY_A or KEY_KP1)
+  - [X] =3.3= Grab device exclusively (EVIOCGRAB ioctl)
+  - [X] =3.4= Read loop goroutine: filter EV_KEY press/release
+  - [X] =3.5= Event channel: keyboard.Event{Code, IsPress, Time}
+  - [ ] =3.6= Hot-plug support via fsnotify on /dev/input (deferred to Phase 7)
+
+** Phase 4: Mouse Simulation (from mouseless)
+
+  - [X] =4.1= Create virtual mouse via uinput.CreateTouchPad()
+  - [X] =4.2= MoveTo(x, y) — absolute positioning via touchpad
+  - [X] =4.3= Click() / RightClick() — left/right click at cursor
+  - [X] =4.4= ClickAt(x, y) — move + click convenience
+  - [X] =4.5= Close() — destroy virtual device
+
+** Phase 5: X11 Overlay
+
+  - [X] =5.1= Connect to X display (xgb.NewConn())
+  - [X] =5.2= Get screen dimensions (Setup().Screen(0))
+  - [X] =5.3= Find 32-bit RGBA visual for transparency
+  - [X] =5.4= Create window: override-redirect, full-screen
+  - [X] =5.5= Set always-on-top (_NET_WM_STATE_ABOVE)
+  - [X] =5.6= Set skip-taskbar / skip-pager
+  - [X] =5.7= Render grid cells: image.NRGBA + PutImage (BGRA)
+  - [X] =5.8= Click-through via shape extension (empty input region)
+  - [ ] =5.9= Render text labels in each cell (deferred to Phase 6)
+  - [ ] =5.10= Highlight selected cell (deferred to Phase 6)
+  - [ ] =5.11= Show sub-grid inside selected cell (deferred to Phase 6)
+
+** Phase 6: Grid Logic + State Machine
+
+  - [X] =6.1= Calculate grid dimensions from screen size + targetSubCellPx
+    - [X] subGridCols = max(3, screenWidth / (3 * targetSubCellPx))
+    - [X] subGridRows = max(3, screenHeight / (3 * targetSubCellPx))
+  - [X] =6.2= Map keys to grid cells (dynamic based on grid size)
+    - [X] Main grid: j,k,l,u,i,o,m,.,'
+    - [X] Sub grid: nearby keyboard keys, generated per size
+  - [X] =6.3= State machine
+    - [X] IDLE → (key press) → MAIN_SELECTED
+    - [X] MAIN_SELECTED → (sub-grid key) → DONE
+    - [X] MAIN_SELECTED → (backspace) → IDLE
+    - [X] any → (escape) → IDLE
+  - [X] =6.4= Calculate pixel coordinates from cell indices
+  - [X] =6.5= Render grid to image.NRGBA (cells, lines, highlight)
+
+** Phase 7: Integration + Event Loop
+
+  - [X] =7.1= Main loop: select on keyboard channel + X11 event channel
+  - [X] =7.2= Forward evdev events to state machine
+  - [X] =7.3= Update overlay rendering on state change
+  - [X] =7.4= Graceful shutdown: release keyboard grab, destroy window, close uinput
+  - [X] =7.5= Tiny bitmap font for grid text labels
+  - [X] =7.6= Render main key labels (scale 4) + sub-key labels (scale 2)
+
+** Phase 8: Logging
+
+  - [X] =8.1= Initialize logrus with file output
+  - [X] =8.2= Log to ~/magnus/mouseless-grid/logs/mouseless-grid_YYYY-MM-DD_HH-MM-SS.log
+  - [X] =8.3= Log keyboard events (via evdev read loop debug output)
+  - [X] =8.4= Log grid selections + mouse actions (via grid state machine)
+  - [X] =8.5= --debug flag for verbose stdout output
+
+** Future Phases (not v1)
+  - [ ] Wayland support (wlr-layer-shell protocol)
+  - [ ] Daemon mode with global hotkey activation
+  - [ ] Right-click / middle-click support
+  - [ ] Drag and drop support
+  - [ ] Sub-grid nudge for extra precision
+  - [ ] Screenshot background behind grid
+  - [ ] Multi-monitor support
+  - [ ] Configurable main grid size (not fixed 3x3)

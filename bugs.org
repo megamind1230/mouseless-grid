@@ -1,0 +1,11 @@
+* mouseless-grid — Known Bugs
+
+  Track bugs here. Each entry: description, how to reproduce, how to fix.
+
+* Known Issues
+
+  - [ ] =BUG-001= User not in input/uinput group
+    - *Description:* Can't read /dev/input or write /dev/uinput without permissions
+    - *Reproduce:* Run without sudo, get permission denied
+    - *Fix:* Run: sudo usermod -a -G input,uinput $USER && reboot
+    - *Status:* open (user setup, not code bug)

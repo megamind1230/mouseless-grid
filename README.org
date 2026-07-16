@@ -1,0 +1,107 @@
+* mouseless-grid
+
+  On-screen grid clicker for Linux. Type characters to select screen regions, click at that point.
+
+** Features
+
+  - Dynamic grid that scales with screen resolution
+  - Fixed 3x3 main grid (left-hand home row keys)
+  - Auto-sized sub-grid (~36px target per sub-cell)
+  - Pure Go, no cgo, single binary
+  - Works on X11 (Wayland planned)
+  - Uses same input architecture as jbensmann/mouseless (evdev + uinput)
+
+** Tech Stack
+
+  | Layer        | Library                          | Purpose                           |
+  |--------------+----------------------------------+-----------------------------------|
+  | Keyboard     | golang-evdev                     | Read /dev/input/event* devices    |
+  | Mouse        | jbensmann/uinput                 | Virtual mouse via /dev/uinput     |
+  | Overlay      | BurntSushi/xgb                   | Pure Go X11 transparent window    |
+  | Config       | yaml.v2 + go-flags               | YAML config + CLI arguments       |
+  | Logging      | logrus                           | Structured file logging           |
+
+** Project Structure
+
+  #+begin_example
+  mouseless-grid/
+  ├── main.go              # entry point, event loop, state machine
+  ├── config/
+  │   ├── config.go        # YAML config loading, defaults
+  │   └── keydefs.go       # evdev keycode <-> string mapping
+  ├── keyboard/
+  │   └── keyboard.go      # evdev device grab + read loop
+  ├── mouse/
+  │   └── mouse.go         # uinput virtual mouse creation + actions
+  ├── overlay/
+  │   └── overlay.go       # X11 window, transparent overlay, grid rendering
+  ├── grid/
+  │   └── grid.go          # grid math, key mapping, selection state
+  ├── config.yaml          # user config (generated on first run)
+  ├── plan-todos.org       # implementation steps
+  ├── bugs.org             # known bugs
+  ├── README.org           # this file
+  └── changelog.org        # version history
+  #+end_example
+
+  Logs: ~/magnus/mouseless-grid/logs/
+
+** How to Use
+
+  #+begin_src bash
+  # Build
+  go build -o mouseless-grid .
+
+  # Run (needs read access to /dev/input and /dev/uinput)
+  sudo ./mouseless-grid
+
+  # Run with custom config
+  sudo ./mouseless-grid --config /path/to/config.yaml
+
+  # List available keyboard devices
+  sudo ./mouseless-grid --list-devices
+
+  # Verbose debug output
+  sudo ./mouseless-grid --debug
+  #+end_src
+
+** Usage
+
+  1. Run the app — overlay appears with 3x3 grid
+  2. Press a key (j/k/l/u/i/o/m/,/.) — main cell highlights, sub-grid shown
+  3. Press a sub-grid key — click fires at that point, app exits
+  4. Press Backspace — undo last selection
+  5. Press Escape — cancel and exit
+
+** Grid Layout
+
+  Main grid (fixed 3x3):
+  #+begin_example
+  j  k  l
+  u  i  o
+  m  ,  .
+  #+end_example
+
+  Sub-grid (dynamic, scales with resolution):
+  #+begin_example
+  On 1366x768: 5x5 = 125 cells, ~27x15px each
+  On 1920x1080: 6x6 = 216 cells, ~36x20px each
+  On 2560x1440: 7x7 = 343 cells, ~37x18px each
+  On 3840x2160: 9x9 = 729 cells, ~24x13px each
+  #+end_example
+
+** Permissions
+
+  The app needs:
+  - Read access to /dev/input/event* (keyboard devices)
+  - Write access to /dev/uinput (virtual device creation)
+
+  Setup without root:
+  #+begin_src bash
+  sudo groupadd --system uinput
+  sudo usermod -a -G input,uinput $USER
+  sudo tee /etc/udev/rules.d/99-mouseless-grid.rules <<EOF
+  KERNEL=="uinput", GROUP="uinput", MODE="0660"
+  EOF
+  # Reboot or: sudo modprobe uinput
+  #+end_src
