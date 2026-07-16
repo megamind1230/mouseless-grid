@@ -9,3 +9,35 @@
     - *Reproduce:* Run without sudo, get permission denied
     - *Fix:* Run: sudo usermod -a -G input,uinput $USER && reboot
     - *Status:* open (user setup, not code bug)
+
+  - [ ] =BUG-002= Grid transparency + click-through on non-composited WMs
+    - *Description:* The overlay uses _NET_WM_WINDOW_OPACITY for transparency, which only works with a running compositor. Without one, the grid is fully opaque. Additionally, the click-through via xfixes empty shape region (SkInput) relies on both XFIXES and SHAPE extensions; if either is missing, clicks land on the overlay window instead of passing through.
+    - *Reproduce:* Run without a compositor (e.g. plain i3, no picom). The grid appears fully opaque and blocks all mouse interaction underneath. Or, on a bare X server without xfixes/shape, the click-through silently fails (no error checked).
+    - *Fix:* 
+      1. Check for compositor presence and fall back to compositing opacity into the image pixels directly (via alpha channel in PutImage) when no compositor is detected.
+      2. Check return values of shape.Init / xfixes.Init and skip click-through setup if extensions are unavailable.
+      3. Alternatively, skip setting _NET_WM_WINDOW_OPACITY when no compositor is running (check _NET_WM_CM_S0 atom).
+    - *Status:* open
+    - *Root cause (code):*
+      - overlay/overlay.go:147-160 — SetOpacity uses _NET_WM_WINDOW_OPACITY (compositor-only)
+      - overlay/overlay.go:248-253 — makeClickThrough doesn't check if xfixes/shape init succeeded
+      - No conn.Sync() between xfixes.SetWindowShapeRegion and xfixes.DestroyRegion; region may be destroyed before shape server consumes it
+
+  - [ ] =BUG-003= Render ignores opacity parameter
+    - *Description:* Grid.Render() signature takes a float64 opacity but immediately discards it with `_`. The window-level opacity is applied separately via SetOpacity(). This means the image pixel data is always fully opaque, and transparency is entirely delegated to the WM/compositor. If compositing opacity fails (BUG-002), there's no fallback.
+    - *Reproduce:* Always — any call to Grid.Render() with any opacity value has no effect.
+    - *Fix:* Either: (a) composite the opacity into the pixel alpha in Render() and remove SetOpacity(), or (b) check compositor availability and fall back to pixel compositing.
+    - *Location:* grid/grid.go:168 — `func (g *Grid) Render(bgColor, textColor, highlightColor color.Color, _ float64)`
+    - *Status:* open, related to BUG-002
+
+  - [ ] =BUG-004= Window not raised on re-expose
+    - *Description:* When the overlay receives an ExposeEvent (e.g. after another window covers and uncovers it), the x11 event handler calls Render() but does not re-raise the window or re-send the always-on-top message. The grid becomes visible but may be stacked below other windows.
+    - *Reproduce:* Cover the grid with a full-screen window, then close that window. The grid reappears but may not be on top.
+    - *Fix:* In the ExposeEvent handler (main.go:230-239), call raiseWindow() and sendAlwaysOnTopMessage() after re-rendering.
+    - *Status:* open
+
+  - [ ] =BUG-005= Keyboard grab not released on crash
+    - *Description:* If the app crashes or is SIGKILL'd, the evdev EVIOCGRAB is never released. The keyboard remains unusable until the device is unplugged/replugged.
+    - *Reproduce:* Kill -9 the process. Keyboard stays grabbed until replug.
+    - *Fix:* Use a defer with a cleanup handler, or run a separate watchdog process. Limited by OS — SIGKILL can't be caught. User fix: replug keyboard.
+    - *Status:* known OS limitation, documented

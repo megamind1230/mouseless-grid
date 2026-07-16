@@ -1,10 +1,12 @@
 * mouseless-grid — Implementation Plan
 
-  On-screen grid clicker for Linux. Type characters to select cells, click at that point.
-  Architecture follows jbensmann/mouseless (evdev + uinput), with X11 overlay via xgb.
+  On-screen grid clicker for Linux. Type 1-9 to zoom into cells, 
+  LCtrl/LAlt to click at that point.
+  Architecture: evdev + uinput + X11 overlay via jezek/xgb.
+
+  Status key: [X] done, [-] in progress, [ ] not started, [~] changed from original plan
 
 ** Phase 1: Project Scaffolding
-  - [ ] =unimplemented, [X] = done, [-] = in progress
 
   - [X] =1.1= Create directory structure
     - [X] config/
@@ -15,43 +17,43 @@
   - [X] =1.2= go mod init mouseless-grid
   - [X] =1.3= Install Go dependencies
     - [X] github.com/gvalkov/golang-evdev
-    - [X] github.com/bendahl/uinput (fork of jbensmann/uinput)
-    - [X] github.com/BurntSushi/xgb
+    - [X] github.com/bendahl/uinput
+    - [X] github.com/jezek/xgb (+ xfixes, shape)
     - [X] github.com/sirupsen/logrus
     - [X] gopkg.in/yaml.v2
-    - [ ] github.com/jessevdk/go-flags (will add in Phase 2)
+    - [X] github.com/jessevdk/go-flags
   - [X] =1.4= Create .org files (plan-todos, bugs, README, changelog)
   - [X] =1.5= Create logs directory ~/magnus/mouseless-grid/logs/
 
 ** Phase 2: Config System
 
   - [X] =2.1= Define Config struct
-    - [X] mainKeys: []string (default: [j,k,l,u,i,o,m,,,.,'])
-    - [X] targetSubCellPx: int (default: 36)
+    - [X] minCellPx: int (default: 10) — stop zooming when cell width ≤ this
     - [X] bgColor: string (default: "#1a1a2e")
     - [X] textColor: string (default: "#e0e0e0")
     - [X] highlightColor: string (default: "#00d4ff")
-    - [X] opacity: float64 (default: 0.85)
+    - [X] opacity: float64 (default: 0.4)
     - [X] logPath: string (default: ~/magnus/mouseless-grid/logs/)
+    - [~] mainKeys / targetSubCellPx — removed; replaced by minCellPx + fixed number keys
   - [X] =2.2= YAML loading with defaults
-  - [X] =2.3= CLI flags (--config, --debug, --list-devices)
-  - [X] =2.4= Generate default config.yaml on first run
+  - [X] =2.3= CLI flags (--config, --debug, --list-devices, --version, --gen-config, --save-debug, --check)
+  - [X] =2.4= Generate default config.yaml on first run (--gen-config flag)
 
-** Phase 3: Keyboard Input (from mouseless)
+** Phase 3: Keyboard Input (evdev)
 
   - [X] =3.1= Enumerate /dev/input/event* devices
   - [X] =3.2= Filter keyboard devices (EV_KEY with KEY_A or KEY_KP1)
   - [X] =3.3= Grab device exclusively (EVIOCGRAB ioctl)
   - [X] =3.4= Read loop goroutine: filter EV_KEY press/release
   - [X] =3.5= Event channel: keyboard.Event{Code, IsPress, Time}
-  - [ ] =3.6= Hot-plug support via fsnotify on /dev/input (deferred to Phase 7)
+  - [ ] =3.6= Hot-plug support via fsnotify on /dev/input (deferred)
 
-** Phase 4: Mouse Simulation (from mouseless)
+** Phase 4: Mouse Simulation
 
-  - [X] =4.1= Create virtual mouse via uinput.CreateTouchPad()
-  - [X] =4.2= MoveTo(x, y) — absolute positioning via touchpad
-  - [X] =4.3= Click() / RightClick() — left/right click at cursor
-  - [X] =4.4= ClickAt(x, y) — move + click convenience
+  - [X] =4.1= Create virtual mouse via uinput.CreateMouse()
+  - [~] =4.2= MoveTo(x, y) — via XTest WarpPointer (not uinput touchpad)
+  - [X] =4.3= Click() / RightClick() — via uinput
+  - [X] =4.4= ClickAt(x, y) / RightClickAt(x, y) — MoveTo + click
   - [X] =4.5= Close() — destroy virtual device
 
 ** Phase 5: X11 Overlay
@@ -59,54 +61,78 @@
   - [X] =5.1= Connect to X display (xgb.NewConn())
   - [X] =5.2= Get screen dimensions (Setup().Screen(0))
   - [X] =5.3= Find 32-bit RGBA visual for transparency
-  - [X] =5.4= Create window: override-redirect, full-screen
+  - [X] =5.4= Create window: full-screen, ARGB depth
   - [X] =5.5= Set always-on-top (_NET_WM_STATE_ABOVE)
-  - [X] =5.6= Set skip-taskbar / skip-pager
-  - [X] =5.7= Render grid cells: image.NRGBA + PutImage (BGRA)
-  - [X] =5.8= Click-through via shape extension (empty input region)
-  - [ ] =5.9= Render text labels in each cell (deferred to Phase 6)
-  - [ ] =5.10= Highlight selected cell (deferred to Phase 6)
-  - [ ] =5.11= Show sub-grid inside selected cell (deferred to Phase 6)
+  - [X] =5.6= Set skip-taskbar / skip-pager + all-desktops
+  - [X] =5.7= Render grid cells: image.NRGBA + PutImage (BGRA conversion)
+  - [X] =5.8= Click-through via xfixes + shape extension (empty input region)
+  - [X] =5.9= Render text labels in each cell — done via 4×6 bitmap font
+  - [X] =5.10= Highlight selected cell — highlightColor fill
+  - [~] =5.11= Show sub-grid inside selected cell — changed: zoom model, no sub-grid popup
+
+  Notes:
+  - 5.8: makeClickThrough uses xfixes.CreateRegion + shape.SkInput — no error checking on init
+  - Opacity via _NET_WM_WINDOW_OPACITY, not pixel alpha (BUG-003)
 
 ** Phase 6: Grid Logic + State Machine
 
-  - [X] =6.1= Calculate grid dimensions from screen size + targetSubCellPx
-    - [X] subGridCols = max(3, screenWidth / (3 * targetSubCellPx))
-    - [X] subGridRows = max(3, screenHeight / (3 * targetSubCellPx))
-  - [X] =6.2= Map keys to grid cells (dynamic based on grid size)
-    - [X] Main grid: j,k,l,u,i,o,m,.,'
-    - [X] Sub grid: nearby keyboard keys, generated per size
+  - [X] =6.1= Calculate grid state from selections + screen size + minCellPx
+    - [~] Zoom model: each press of 1-9 subdivides region into 3×3
+    - [~] Auto-advance to StateReady when cell width ≤ minCellPx
+  - [X] =6.2= Map keys to grid cells
+    - [~] Fixed mapping: 1-9 → 3×3 grid (not dynamic per screen size)
+    - [~] No sub-grid key mapping — pure recursion zoom
   - [X] =6.3= State machine
-    - [X] IDLE → (key press) → MAIN_SELECTED
-    - [X] MAIN_SELECTED → (sub-grid key) → DONE
-    - [X] MAIN_SELECTED → (backspace) → IDLE
-    - [X] any → (escape) → IDLE
+    - [X] IDLE → (number 1-9) → ZOOMED
+    - [X] ZOOMED → (number 1-9) → ZOOMED (or READY if precision reached)
+    - [X] ZOOMED → (backspace) → previous level (or IDLE if empty)
+    - [X] ZOOMED → (enter) → READY (early confirm)
+    - [X] READY → (LCtrl) → left click + exit
+    - [X] READY → (LAlt) → right click + exit
+    - [X] READY → (backspace) → ZOOMED (undo)
+    - [X] any → (escape) → exit
   - [X] =6.4= Calculate pixel coordinates from cell indices
-  - [X] =6.5= Render grid to image.NRGBA (cells, lines, highlight)
+    - [X] clickX/Y = center of final cell region
+  - [X] =6.5= Render grid to image.NRGBA (cells, lines, highlight, labels)
 
 ** Phase 7: Integration + Event Loop
 
-  - [X] =7.1= Main loop: select on keyboard channel + X11 event channel
+  - [X] =7.1= Main loop: select on keyboard channel
   - [X] =7.2= Forward evdev events to state machine
   - [X] =7.3= Update overlay rendering on state change
   - [X] =7.4= Graceful shutdown: release keyboard grab, destroy window, close uinput
-  - [X] =7.5= Tiny bitmap font for grid text labels
-  - [X] =7.6= Render main key labels (scale 4) + sub-key labels (scale 2)
+  - [X] =7.5= Tiny bitmap font for grid text labels (grid/font.go)
+  - [X] =7.6= Render cell number labels with dynamic scale (2-4x)
+  - [X] =7.7= Background goroutine for X11 expose events
 
 ** Phase 8: Logging
 
   - [X] =8.1= Initialize logrus with file output
   - [X] =8.2= Log to ~/magnus/mouseless-grid/logs/mouseless-grid_YYYY-MM-DD_HH-MM-SS.log
   - [X] =8.3= Log keyboard events (via evdev read loop debug output)
-  - [X] =8.4= Log grid selections + mouse actions (via grid state machine)
+  - [X] =8.4= Log grid selections + mouse actions
   - [X] =8.5= --debug flag for verbose stdout output
+  - [X] =8.6= Dual output: stdout + log file via io.MultiWriter
 
-** Future Phases (not v1)
+** Known Bugs
+
+  See bugs.org for details.
+
+  - BUG-001 Permission setup
+  - BUG-002 Transparency + click-through fails without compositor
+  - BUG-003 Render() ignores opacity parameter
+  - BUG-004 Window not re-raised on expose
+  - BUG-005 Keyboard grab leaks on SIGKILL
+
+** Future (not v1)
+
   - [ ] Wayland support (wlr-layer-shell protocol)
   - [ ] Daemon mode with global hotkey activation
-  - [ ] Right-click / middle-click support
   - [ ] Drag and drop support
   - [ ] Sub-grid nudge for extra precision
   - [ ] Screenshot background behind grid
   - [ ] Multi-monitor support
-  - [ ] Configurable main grid size (not fixed 3x3)
+  - [ ] Configurable grid size (not fixed 3×3)
+  - [ ] Hot-plug keyboard support via fsnotify
+  - [ ] Fallback pixel-level opacity when no compositor
+  - [ ] xfixes/shape init error checks for click-through

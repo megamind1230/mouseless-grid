@@ -1,25 +1,32 @@
 * mouseless-grid
 
-  On-screen grid clicker for Linux. Type characters to select screen regions, click at that point.
+  On-screen grid clicker for Linux. Type 1-9 to zoom into a 3×3 grid, click at the target.
 
 ** Features
 
-  - Dynamic grid that scales with screen resolution
-  - Fixed 3x3 main grid (left-hand home row keys)
-  - Auto-sized sub-grid (~36px target per sub-cell)
-  - Pure Go, no cgo, single binary
-  - Works on X11 (Wayland planned)
-  - Uses same input architecture as jbensmann/mouseless (evdev + uinput)
+  - ImageJ-style zoom: 1-9 keys recursively divide screen into 3×3 cells
+  - Auto-stops when cell width ≤ minCellPx (default 10px)
+  - Left click (LCtrl) / Right click (LAlt) on the final cell
+  - Enter confirms early without max zoom
+  - Backspace to undo one zoom level
+  - Transparent click-through overlay (X11 ARGB visual + xfixes shape input)
+  - Full-screen, always-on-top, skip-taskbar
+  - Built-in bitmap font (4×6) for cell labels
+  - Pure Go, single binary, no cgo
+  - Works on X11; transparency requires a compositor (picom, xcompmgr, etc.)
+  - XTest WarpPointer for cursor movement + uinput for click
+  - Keyboard-only interaction (no mouse clicks on the overlay itself)
 
 ** Tech Stack
 
-  | Layer        | Library                          | Purpose                           |
-  |--------------+----------------------------------+-----------------------------------|
-  | Keyboard     | golang-evdev                     | Read /dev/input/event* devices    |
-  | Mouse        | jbensmann/uinput                 | Virtual mouse via /dev/uinput     |
-  | Overlay      | BurntSushi/xgb                   | Pure Go X11 transparent window    |
-  | Config       | yaml.v2 + go-flags               | YAML config + CLI arguments       |
-  | Logging      | logrus                           | Structured file logging           |
+  | Layer        | Library                          | Purpose                                |
+  |--------------+----------------------------------+----------------------------------------|
+  | Keyboard     | golang-evdev                     | Read /dev/input/event* devices         |
+  | Mouse        | bendahl/uinput + XTest           | Virtual mouse click + cursor warp      |
+  | Overlay      | jezek/xgb                        | X11 transparent window (ARGB visual)   |
+  | Click-through| jezek/xgb/xfixes + shape         | Empty input region via shape extension |
+  | Config       | yaml.v2 + go-flags               | YAML config + CLI arguments            |
+  | Logging      | logrus                           | Structured file logging                |
 
 ** Project Structure
 
@@ -32,12 +39,12 @@
   ├── keyboard/
   │   └── keyboard.go      # evdev device grab + read loop
   ├── mouse/
-  │   └── mouse.go         # uinput virtual mouse creation + actions
+  │   └── mouse.go         # XTest WarpPointer + uinput virtual mouse
   ├── overlay/
-  │   └── overlay.go       # X11 window, transparent overlay, grid rendering
+  │   └── overlay.go       # X11 ARGB window, transparency, click-through, grid rendering
   ├── grid/
-  │   └── grid.go          # grid math, key mapping, selection state
-  ├── config.yaml          # user config (generated on first run)
+  │   ├── grid.go          # Grid math, zoom state machine, rendering
+  │   └── font.go          # Tiny 4×6 bitmap font for cell labels
   ├── plan-todos.org       # implementation steps
   ├── bugs.org             # known bugs
   ├── README.org           # this file
@@ -46,13 +53,41 @@
 
   Logs: ~/magnus/mouseless-grid/logs/
 
-** How to Use
+** Dependencies (system)
+
+  These must be present on the system for the app to work:
+
+  | Dependency          | Why                              | How to set up                                                     |
+  |---------------------+----------------------------------+-------------------------------------------------------------------|
+  | X11 (Xorg)          | Overlay window                   | Already running if you're on a Linux desktop                       |
+  | evdev kernel module | Read keyboard events             | Already loaded on any modern Linux                                 |
+  | uinput kernel module| Virtual mouse device             | =sudo modprobe uinput= (add to /etc/modules-load.d/ to persist)    |
+  | SHAPE extension     | Click-through overlay            | Built into Xorg, always available                                  |
+  | XFIXES extension    | Input region for click-through   | Built into Xorg, always available                                  |
+  | Go 1.26+            | Building from source             | Install: =sudo apt install golang= or =sudo pacman -S go=         |
+  | Compositor (optional)| Window transparency              | =sudo apt install picom= / =sudo pacman -S picom=, then add to WM startup |
+
+** Quick Start
 
   #+begin_src bash
+  # Clone
+  git clone git@github.com:megamind1230/mouseless-grid.git
+  cd mouseless-grid
+
   # Build
   go build -o mouseless-grid .
 
   # Run (needs read access to /dev/input and /dev/uinput)
+  sudo ./mouseless-grid
+  #+end_src
+
+** How to Run
+
+  #+begin_src bash
+  # Build from source
+  go build -o mouseless-grid .
+
+  # Run with defaults
   sudo ./mouseless-grid
 
   # Run with custom config
@@ -63,32 +98,68 @@
 
   # Verbose debug output
   sudo ./mouseless-grid --debug
+
+  # Generate default config file
+  sudo ./mouseless-grid --gen-config
+
+  # Save rendered overlay to PNG for inspection
+  sudo ./mouseless-grid --save-debug
+
+  # Diagnostic mode: create overlay, print window ID, sleep 10s
+  sudo ./mouseless-grid --check
+
+  # Build + run in one step (no binary left behind)
+  sudo go run . --debug
   #+end_src
 
 ** Usage
 
-  1. Run the app — overlay appears with 3x3 grid
-  2. Press a key (j/k/l/u/i/o/m/,/.) — main cell highlights, sub-grid shown
-  3. Press a sub-grid key — click fires at that point, app exits
-  4. Press Backspace — undo last selection
-  5. Press Escape — cancel and exit
+  1. Run the app — full-screen transparent overlay appears with 3×3 grid labelled 1-9
+  2. Press 1-9 — the selected cell highlights, region zooms to that cell (3×3 sub-grid shown)
+  3. Repeat to refine position until cell is small enough (or press Enter to confirm early)
+  4. Press LCtrl for left-click or LAlt for right-click — click fires at cell center, overlay hides, app exits
+  5. Press Backspace — undo last zoom step
+  6. Press Escape — cancel and exit
 
 ** Grid Layout
 
-  Main grid (fixed 3x3):
+  Zoom grid (fixed 3×3, number keys):
   #+begin_example
-  j  k  l
-  u  i  o
-  m  ,  .
+  1  2  3
+  4  5  6
+  7  8  9
   #+end_example
 
-  Sub-grid (dynamic, scales with resolution):
-  #+begin_example
-  On 1366x768: 5x5 = 125 cells, ~27x15px each
-  On 1920x1080: 6x6 = 216 cells, ~36x20px each
-  On 2560x1440: 7x7 = 343 cells, ~37x18px each
-  On 3840x2160: 9x9 = 729 cells, ~24x13px each
-  #+end_example
+  Each zoom level subdivides the current region into another 3×3.
+  Zoom stops when cell width ≤ minCellPx (configurable, default 10px).
+  At that point the state automatically switches to Ready — press LCtrl/LAlt to click.
+
+  Click coordinate = center of the final cell.
+
+** CLI Flags
+
+  | Flag              | Description                                      |
+  |-------------------+--------------------------------------------------|
+  | -v / --version    | Show version                                     |
+  | -d / --debug      | Verbose debug output (stdout + log file)         |
+  | -c / --config     | Path to config file (default: ~/.config/...)     |
+  | -l / --list-devices | List keyboard devices                           |
+  | --gen-config      | Generate default config file and exit            |
+  | --save-debug      | Save rendered overlay as PNG to log dir          |
+  | --check           | Create overlay, log window ID, sleep 10s (xprop) |
+
+** Config
+
+  Default location: ~/.config/mouseless-grid/config.yaml
+
+  #+begin_src yaml
+  minCellPx: 10        # stop zooming when cell width ≤ this
+  bgColor: "#1a1a2e"   # background color (hex)
+  textColor: "#e0e0e0" # label color
+  highlightColor: "#00d4ff" # selected cell color
+  opacity: 0.4         # window opacity (via _NET_WM_WINDOW_OPACITY)
+  logPath: "~/magnus/mouseless-grid/logs/"
+  #+end_src
 
 ** Permissions
 

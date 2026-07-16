@@ -1,28 +1,38 @@
 * mouseless-grid — Changelog
 
-  All notable changes to this project will be documented here.
+  All notable changes to this project are documented here.
+
+** [0.1.0] - 2026-07-16
+
+  Initial release.
+
+  Added:
+  - [X] 3×3 zoom grid with recursive ImageJ-style subdivision
+  - [X] Number keys 1-9 for cell selection during zoom
+  - [X] LCtrl left-click / LAlt right-click at final cell
+  - [X] Enter early-confirm, Backspace undo, Escape cancel
+  - [X] Full-screen transparent overlay (X11 ARGB visual)
+  - [X] Click-through via xfixes shape extension (empty input region)
+  - [X] Window opacity via _NET_WM_WINDOW_OPACITY
+  - [X] Always-on-top, skip-taskbar, all-desktops
+  - [X] evdev keyboard grab + read loop
+  - [X] uinput virtual mouse for click events
+  - [X] XTest WarpPointer for cursor positioning
+  - [X] 4×6 bitmap font for cell labels (grid/font.go)
+  - [X] YAML configuration with defaults
+  - [X] CLI flags: --debug, --config, --list-devices, --version, --gen-config, --save-debug, --check
+  - [X] Structured logging to file (~/magnus/mouseless-grid/logs/)
+  - [X] Expose event handling for re-render after window damage
 
 ** Unreleased
 
-  - [ ] Phase 1: Project scaffolding
-  - [ ] Phase 2: Config system
-  - [ ] Phase 3: Keyboard input (evdev)
-  - [ ] Phase 4: Mouse simulation (uinput)
-  - [ ] Phase 5: X11 overlay (xgb)
-  - [ ] Phase 6: Grid logic + state machine
-  - [ ] Phase 7: Integration + event loop
-  - [ ] Phase 8: Logging
-
-** [0.1.0] - YYYY-MM-DD
-
-  Initial release (not yet released)
-
-  Added:
-  - [ ] Dynamic grid overlay on X11
-  - [ ] 3x3 main grid with left-hand home row keys
-  - [ ] Auto-scaling sub-grid based on screen resolution
-  - [ ] Keyboard input via evdev
-  - [ ] Mouse click simulation via uinput
-  - [ ] YAML configuration
-  - [ ] Structured logging
-  - [ ] --debug, --config, --list-devices CLI flags
+  - [ ] Wayland support (wlr-layer-shell protocol)
+  - [ ] Daemon mode with global hotkey activation
+  - [ ] Drag and drop support
+  - [ ] Sub-grid nudge for extra precision
+  - [ ] Screenshot background behind grid
+  - [ ] Multi-monitor support
+  - [ ] Configurable grid size (not fixed 3×3)
+  - [ ] Hot-plug keyboard support via fsnotify
+  - [ ] Fallback pixel-level opacity when no compositor
+  - [ ] xfixes/shape init error checks for click-through
