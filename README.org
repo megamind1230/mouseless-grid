@@ -203,3 +203,7 @@
   EOF
   # Reboot or: sudo modprobe uinput
   #+end_src
+
+** inspirations
+https://mouseless.click/
+https://github.com/jbensmann/mouseless
