@@ -24,6 +24,7 @@ type Event struct {
 type Device struct {
 	device    *evdev.InputDevice
 	eventChan chan<- Event
+	done      chan struct{}
 }
 
 // NewKeyboardDevice creates a new keyboard device wrapper
@@ -31,6 +32,7 @@ func NewKeyboardDevice(device *evdev.InputDevice, eventChan chan<- Event) *Devic
 	return &Device{
 		device:    device,
 		eventChan: eventChan,
+		done:      make(chan struct{}),
 	}
 }
 
@@ -71,18 +73,28 @@ func (d *Device) readLoop() {
 				codeAlias = "?"
 			}
 			if event.Value == 1 {
-				log.Debugf("Pressed:  %s (%d)", codeAlias, event.Code)
+				log.Infof("Pressed:  %s (%d)", codeAlias, event.Code)
 			} else {
 				log.Debugf("Released: %s (%d)", codeAlias, event.Code)
 			}
 
-			d.eventChan <- Event{
+			select {
+			case d.eventChan <- Event{
 				Code:    event.Code,
 				IsPress: event.Value == 1,
 				Time:    time.Now(),
+			}:
+			case <-d.done:
+				return
 			}
 		}
 	}
+}
+
+func (d *Device) Close() error {
+	close(d.done)
+	_ = d.device.File.Close()
+	return nil
 }
 
 func (d *Device) Path() string { return d.device.Fn }

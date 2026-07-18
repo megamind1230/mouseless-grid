@@ -1,32 +1,39 @@
 * mouseless-grid
 
-  On-screen grid clicker for Linux. Type 1-9 to zoom into a 3×3 grid, click at the target.
+  On-screen grid clicker for Linux. Type 1-9 to zoom into a 3×3 grid,
+  then press /i/ to left-click or /o/ to right-click at the target.
+
+  Pure Go, single binary, no cgo. X11 and Wayland.
 
 ** Features
 
-  - ImageJ-style zoom: 1-9 keys recursively divide screen into 3×3 cells
+  - ImageJ-style zoom: number keys recursively divide screen into 3×3 cells
+  - Arrangement: 1-9 on numpad, or asdfghjkl on home row (=--grid-layout=)
   - Auto-stops when cell width ≤ minCellPx (default 10px)
-  - Left click (LCtrl) / Right click (LAlt) on the final cell
+  - /i/ left-click, /o/ right-click at the current cell center (works from any zoom level)
   - Enter confirms early without max zoom
   - Backspace to undo one zoom level
-  - Transparent click-through overlay (X11 ARGB visual + xfixes shape input)
-  - Full-screen, always-on-top, skip-taskbar
-  - Built-in bitmap font (4×6) for cell labels
-  - Pure Go, single binary, no cgo
-  - Works on X11; transparency requires a compositor (picom, xcompmgr, etc.)
-  - XTest WarpPointer for cursor movement + uinput for click
-  - Keyboard-only interaction (no mouse clicks on the overlay itself)
+  - Escape to cancel
+  - Click-through overlay — click actions pass through to the target window
+  - Works on X11 and Wayland (Hyprland, Sway, wlroots-based compositors)
+  - X11: ARGB overlay + XTest WarpPointer + uinput click
+  - Wayland: wlr-layer-shell overlay + wlr-virtual-pointer + wl_keyboard input
+  - Built-in bitmap font (4×6, A-Z, a-z, 0-9)
+  - Per-keypress logging (info) for easy debugging
+  - Runtime platform detection (XDG_SESSION_TYPE / WAYLAND_DISPLAY)
 
 ** Tech Stack
 
   | Layer        | Library                          | Purpose                                |
   |--------------+----------------------------------+----------------------------------------|
-  | Keyboard     | golang-evdev                     | Read /dev/input/event* devices         |
-  | Mouse        | bendahl/uinput + XTest           | Virtual mouse click + cursor warp      |
-  | Overlay      | jezek/xgb                        | X11 transparent window (ARGB visual)   |
-  | Click-through| jezek/xgb/xfixes + shape         | Empty input region via shape extension |
-  | Config       | yaml.v2 + go-flags               | YAML config + CLI arguments            |
-  | Logging      | logrus                           | Structured file logging                |
+  | Keyboard(X11)| golang-evdev                     | evdev grab from /dev/input/event*       |
+  | Keyboard(Way)| neurlang/wayland (wl_keyboard)   | Compositor-routed keyboard input        |
+  | Mouse (X11)  | bendahl/uinput + XTest           | Virtual click + cursor warp             |
+  | Mouse (Way)  | wlr-virtual-pointer + uinput     | Virtual pointer via Wayland protocol    |
+  | Overlay (X11)| jezek/xgb                        | X11 transparent window (ARGB visual)    |
+  | Overlay (Way)| neurlang/wayland + wlr-layer-shell| Wayland layer-surface overlay           |
+  | Config       | yaml.v2 + go-flags               | YAML config + CLI arguments              |
+  | Logging      | logrus                           | Structured file logging                  |
 
 ** Project Structure
 
@@ -34,17 +41,22 @@
   mouseless-grid/
   ├── main.go              # entry point, event loop, state machine
   ├── config/
-  │   ├── config.go        # YAML config loading, defaults
+  │   ├── config.go        # YAML config loading, defaults (GridLayout field)
   │   └── keydefs.go       # evdev keycode <-> string mapping
   ├── keyboard/
-  │   └── keyboard.go      # evdev device grab + read loop
+  │   └── keyboard.go      # evdev device read loop (X11 only on Wayland)
   ├── mouse/
-  │   └── mouse.go         # XTest WarpPointer + uinput virtual mouse
+  │   ├── mouse.go         # Pointer interface
+  │   ├── mouse_x11.go     # XTest WarpPointer + uinput virtual mouse
+  │   └── mouse_wayland.go # wlr-virtual-pointer
   ├── overlay/
-  │   └── overlay.go       # X11 ARGB window, transparency, click-through, grid rendering
+  │   ├── overlay.go       # Window interface + SaveDebugImage helper
+  │   ├── overlay_x11.go   # X11 ARGB window, transparency, click-through
+  │   └── overlay_wayland.go # wlr-layer-shell overlay + wl_keyboard input
   ├── grid/
   │   ├── grid.go          # Grid math, zoom state machine, rendering
-  │   └── font.go          # Tiny 4×6 bitmap font for cell labels
+  │   └── font.go          # Tiny 4x6 bitmap font (A-Z, a-z, 0-9)
+  ├── wlr/                 # Generated wlr-layer-shell + wlr-virtual-pointer bindings
   ├── plan-todos.org       # implementation steps
   ├── bugs.org             # known bugs
   ├── README.org           # this file
@@ -59,13 +71,13 @@
 
   | Dependency          | Why                              | How to set up                                                     |
   |---------------------+----------------------------------+-------------------------------------------------------------------|
-  | X11 (Xorg)          | Overlay window                   | Already running if you're on a Linux desktop                       |
-  | evdev kernel module | Read keyboard events             | Already loaded on any modern Linux                                 |
+  | X11 (Xorg)          | X11 overlay (X11 mode)           | Already running if you're on X11                                   |
+  | Wayland compositor  | Wayland overlay (Wayland mode)   | Hyprland, Sway, or any wlroots-based compositor                    |
+  | evdev kernel module | Read keyboard events (X11)       | Already loaded on any modern Linux                                 |
   | uinput kernel module| Virtual mouse device             | =sudo modprobe uinput= (add to /etc/modules-load.d/ to persist)    |
-  | SHAPE extension     | Click-through overlay            | Built into Xorg, always available                                  |
-  | XFIXES extension    | Input region for click-through   | Built into Xorg, always available                                  |
+  | wlr-layer-shell     | Wayland overlay surface          | Supported by Hyprland, Sway, and most wlroots compositors          |
+  | wlr-virtual-pointer | Wayland cursor movement + clicks | Supported by Hyprland, Sway, and most wlroots compositors          |
   | Go 1.26+            | Building from source             | Install: =sudo apt install golang= or =sudo pacman -S go=         |
-  | Compositor (optional)| Window transparency              | =sudo apt install picom= / =sudo pacman -S picom=, then add to WM startup |
 
 ** Quick Start
 
@@ -77,7 +89,7 @@
   # Build
   go build -o mouseless-grid .
 
-  # Run (needs read access to /dev/input and /dev/uinput)
+  # Run
   sudo ./mouseless-grid
   #+end_src
 
@@ -92,6 +104,9 @@
 
   # Run with custom config
   sudo ./mouseless-grid --config /path/to/config.yaml
+
+  # Home-row grid layout (asdfghjkl)
+  sudo ./mouseless-grid --grid-layout home
 
   # List available keyboard devices
   sudo ./mouseless-grid --list-devices
@@ -114,25 +129,35 @@
 
 ** Usage
 
-  1. Run the app — full-screen transparent overlay appears with 3×3 grid labelled 1-9
-  2. Press 1-9 — the selected cell highlights, region zooms to that cell (3×3 sub-grid shown)
-  3. Repeat to refine position until cell is small enough (or press Enter to confirm early)
-  4. Press LCtrl for left-click or LAlt for right-click — click fires at cell center, overlay hides, app exits
-  5. Press Backspace — undo last zoom step
-  6. Press Escape — cancel and exit
+  1. Run the app — full-screen transparent overlay appears with 3×3 grid
+  2. Press a number key to zoom into that cell — the region subdivides into another 3×3
+     - Numpad: 1-9 (default) or Home-row: A S D F G H J K L (--grid-layout home)
+  3. Repeat to refine position — zoom auto-stops when cell is small enough
+  4. Press /i/ to left-click or /o/ to right-click at the current cell center
+     - Clicks work immediately after any zoom — no need to press Enter first
+  5. Press Enter to "hold position" (prevents further zooming)
+  6. Press Backspace to undo last zoom step
+  7. Press Escape to cancel and exit
 
-** Grid Layout
+** Grid Layouts
 
-  Zoom grid (fixed 3×3, number keys):
-  #+begin_example
-  1  2  3
-  4  5  6
-  7  8  9
-  #+end_example
+   Numpad layout (=--grid-layout num=, default):
+   #+begin_example
+   1  2  3
+   4  5  6
+   7  8  9
+   #+end_example
 
-  Each zoom level subdivides the current region into another 3×3.
-  Zoom stops when cell width ≤ minCellPx (configurable, default 10px).
-  At that point the state automatically switches to Ready — press LCtrl/LAlt to click.
+   [[file:screenshots/num-grid-layout.png]]
+
+   Home-row layout (=--grid-layout home=):
+   #+begin_example
+   A  S  D
+   F  G  H
+   J  K  L
+   #+end_example
+
+   [[file:screenshots/home-grid-layout.png]]
 
   Click coordinate = center of the final cell.
 
@@ -146,7 +171,8 @@
   | -l / --list-devices | List keyboard devices                           |
   | --gen-config      | Generate default config file and exit            |
   | --save-debug      | Save rendered overlay as PNG to log dir          |
-  | --check           | Create overlay, log window ID, sleep 10s (xprop) |
+  | --check           | Create overlay, log window ID, sleep 10s         |
+  | --grid-layout     | Grid layout: num (default) or home               |
 
 ** Config
 
@@ -157,8 +183,9 @@
   bgColor: "#1a1a2e"   # background color (hex)
   textColor: "#e0e0e0" # label color
   highlightColor: "#00d4ff" # selected cell color
-  opacity: 0.4         # window opacity (via _NET_WM_WINDOW_OPACITY)
+  opacity: 0.4         # window opacity
   logPath: "~/magnus/mouseless-grid/logs/"
+  gridLayout: "num"    # num (1-9) or home (asdfghjkl)
   #+end_src
 
 ** Permissions

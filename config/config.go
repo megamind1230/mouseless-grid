@@ -13,7 +13,8 @@ import (
 // Config holds all configuration options
 type Config struct {
 	// Grid settings
-	MinCellPx int `yaml:"minCellPx"` // stop zooming when cell width ≤ this
+	MinCellPx  int    `yaml:"minCellPx"`  // stop zooming when cell width ≤ this
+	GridLayout string `yaml:"gridLayout"` // "num" (1-9) or "home" (asdfghjkl)
 
 	// Appearance
 	BgColor        string  `yaml:"bgColor"`
@@ -33,6 +34,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		MinCellPx:       10,
+		GridLayout:      "num",
 		BgColor:        "#1a1a2e",
 		TextColor:      "#e0e0e0",
 		HighlightColor: "#00d4ff",

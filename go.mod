@@ -11,4 +11,9 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 )
 
-require golang.org/x/sys v0.21.0 // indirect
+require (
+	github.com/lukem570/wayland-go v0.0.0-20260608112318-ba07168d8b28 // indirect
+	github.com/neurlang/wayland v0.4.3 // indirect
+	github.com/yalue/native_endian v1.0.2 // indirect
+	golang.org/x/sys v0.36.0 // indirect
+)

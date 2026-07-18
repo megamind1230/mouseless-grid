@@ -22,16 +22,17 @@ import (
 )
 
 var opts struct {
-	Version  bool   `short:"v" long:"version" description:"Show version"`
-	Debug    bool   `short:"d" long:"debug" description:"Verbose debug output"`
-	Config   string `short:"c" long:"config" description:"Path to config file"`
-	ListDev  bool   `short:"l" long:"list-devices" description:"List keyboard devices"`
-	GenConf  bool   `long:"gen-config" description:"Generate default config file"`
-	SavDebug bool   `long:"save-debug" description:"Save rendered overlay to PNG"`
-	Check    bool   `long:"check" description:"Create overlay, log window ID, sleep 10s (for xprop diagnostics)"`
+	Version    bool   `short:"v" long:"version" description:"Show version"`
+	Debug      bool   `short:"d" long:"debug" description:"Verbose debug output"`
+	Config     string `short:"c" long:"config" description:"Path to config file"`
+	ListDev    bool   `short:"l" long:"list-devices" description:"List keyboard devices"`
+	GenConf    bool   `long:"gen-config" description:"Generate default config file"`
+	SavDebug   bool   `long:"save-debug" description:"Save rendered overlay to PNG"`
+	Check      bool   `long:"check" description:"Create overlay, log window ID, sleep 10s (for xprop diagnostics)"`
+	GridLayout string `long:"grid-layout" default:"num" choice:"num" choice:"home" description:"Grid layout: num (1-9) or home (asdfghjkl)"`
 }
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	_, err := flags.Parse(&opts)
@@ -44,7 +45,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// init logging
 	log.SetFormatter(&log.TextFormatter{FullTimestamp: true, TimestampFormat: "15:04:05.000"})
 	if opts.Debug {
 		log.SetLevel(log.DebugLevel)
@@ -52,25 +52,25 @@ func main() {
 		log.SetLevel(log.InfoLevel)
 	}
 
-	// load config
 	cfg, err := config.Load(opts.Config)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 	cfg.Debug = opts.Debug
 	cfg.ConfigPath = opts.Config
+	if opts.GridLayout != "num" {
+		cfg.GridLayout = opts.GridLayout
+	}
 
 	if err := config.EnsureLogDir(cfg); err != nil {
 		log.Warnf("Failed to create log dir: %v", err)
 	}
 
-	// setup file logging
 	logFile := setupFileLogging(cfg)
 	if logFile != nil {
 		defer logFile.Close()
 	}
 
-	// generate config and exit
 	if opts.GenConf {
 		if err := config.Save(cfg, opts.Config); err != nil {
 			log.Fatalf("Failed to save config: %v", err)
@@ -79,24 +79,38 @@ func main() {
 		os.Exit(0)
 	}
 
-	// list devices and exit
 	if opts.ListDev {
 		printKeyboardDevices()
 		os.Exit(0)
 	}
 
-	// check mode: create overlay, render, log WID, sleep for xprop diagnostics
 	if opts.Check {
 		runCheck(cfg)
 		os.Exit(0)
 	}
 
 	log.Info("mouseless-grid starting")
-	run(cfg)
+
+	if isWayland() {
+		log.Info("Running on Wayland")
+		runWayland(cfg)
+	} else {
+		log.Info("Running on X11")
+		runX11(cfg)
+	}
 }
 
-func run(cfg *config.Config) {
-	// 1. create overlay
+func isWayland() bool {
+	if os.Getenv("XDG_SESSION_TYPE") == "wayland" {
+		return true
+	}
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		return true
+	}
+	return false
+}
+
+func runX11(cfg *config.Config) {
 	ov, err := overlay.New()
 	if err != nil {
 		log.Fatalf("Failed to create overlay: %v", err)
@@ -108,18 +122,15 @@ func run(cfg *config.Config) {
 	log.Infof("Screen: %dx%d", sW, sH)
 	ov.SetOpacity(cfg.Opacity)
 
-	// 2. create grid
 	g := grid.New(cfg, sW, sH)
 	log.Infof("Grid: %s", g)
 
-	// 3. create virtual mouse via XTest
-	vmouse, err := mouse.New(ov.Conn())
+	vmouse, err := mouse.NewX11(ov.Conn())
 	if err != nil {
 		log.Fatalf("Failed to create virtual mouse: %v", err)
 	}
 	defer vmouse.Close()
 
-	// 4. grab keyboard devices
 	keyChan := make(chan keyboard.Event, 100)
 	keyboards, err := keyboard.ListKeyboardDevices()
 	if err != nil {
@@ -130,16 +141,22 @@ func run(cfg *config.Config) {
 		log.Fatal("No keyboard devices found")
 	}
 
+	var kbs []*keyboard.Device
 	for _, dev := range keyboards {
 		kd := keyboard.NewKeyboardDevice(dev, keyChan)
 		if err := kd.GrabDevice(); err != nil {
 			log.Warnf("Failed to grab %s: %v", dev.Fn, err)
 			continue
 		}
+		kbs = append(kbs, kd)
 		log.Infof("Grabbed keyboard: %s", dev.Name)
 	}
+	defer func() {
+		for _, kb := range kbs {
+			kb.Close()
+		}
+	}()
 
-	// 5. initial render
 	var debugPath string
 	if opts.SavDebug {
 		debugPath = filepath.Join(cfg.LogPath, "debug-overlay.png")
@@ -148,11 +165,9 @@ func run(cfg *config.Config) {
 	highlightColor := config.ParseColor(cfg.HighlightColor)
 	renderOverlay(ov, g, bgColor, highlightColor, 1.0, debugPath)
 
-	// 6. handle X11 events in background (expose, etc.)
 	go handleX11Events(ov, g, bgColor, highlightColor, 1.0, debugPath)
 
-	// 7. main event loop: keyboard → grid → render/click
-	log.Info("Ready. Type 1-9 to zoom, Enter to confirm, LCtrl/LAlt to click, Esc to exit.")
+	log.Info("Ready. Type 1-9 to zoom, Enter to confirm, i/o to click, Esc to exit.")
 	for ev := range keyChan {
 		if !ev.IsPress {
 			continue
@@ -160,53 +175,122 @@ func run(cfg *config.Config) {
 
 		alias, _ := getAliasForCode(ev.Code)
 
-		// escape always exits
 		if alias == "esc" {
 			log.Info("Escape pressed, exiting")
 			return
 		}
 
-		// click choice in Ready state (handled here, not by grid)
-		if g.State() == grid.StateReady {
-			switch alias {
-			case "leftctrl":
-				ov.Hide()
-				time.Sleep(50 * time.Millisecond)
-				log.Infof("Left click at (%d, %d)", g.ClickX(), g.ClickY())
-				if err := vmouse.ClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
-					log.Errorf("Click failed: %v", err)
-				}
-				time.Sleep(100 * time.Millisecond)
-				log.Info("Done")
-				return
-			case "leftalt":
-				ov.Hide()
-				time.Sleep(50 * time.Millisecond)
-				log.Infof("Right click at (%d, %d)", g.ClickX(), g.ClickY())
-				if err := vmouse.RightClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
-					log.Errorf("Right click failed: %v", err)
-				}
-				time.Sleep(100 * time.Millisecond)
-				log.Info("Done")
-				return
+		switch alias {
+		case "i":
+			ov.Hide()
+			time.Sleep(50 * time.Millisecond)
+			log.Infof("Left click at (%d, %d)", g.ClickX(), g.ClickY())
+			if err := vmouse.ClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
+				log.Errorf("Click failed: %v", err)
 			}
+			time.Sleep(100 * time.Millisecond)
+			log.Info("Done")
+			return
+		case "o":
+			ov.Hide()
+			time.Sleep(50 * time.Millisecond)
+			log.Infof("Right click at (%d, %d)", g.ClickX(), g.ClickY())
+			if err := vmouse.RightClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
+				log.Errorf("Right click failed: %v", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			log.Info("Done")
+			return
 		}
 
 		if g.HandleKey(ev) {
-			// when entering Ready state, move cursor to show position
 			if g.State() == grid.StateReady {
 				if err := vmouse.MoveTo(int32(g.ClickX()), int32(g.ClickY())); err != nil {
 					log.Warnf("MoveTo failed: %v", err)
 				}
 			}
-
-			// re-render on state change
 			renderOverlay(ov, g, bgColor, highlightColor, 1.0, debugPath)
 		}
 	}
 }
 
-func renderOverlay(ov *overlay.Overlay, g *grid.Grid, bgColor, highlightColor color.Color, opacity float64, debugPath string) {
+func runWayland(cfg *config.Config) {
+	keyChan := make(chan keyboard.Event, 100)
+	ov, err := overlay.NewWayland(keyChan)
+	if err != nil {
+		log.Fatalf("Failed to create overlay: %v", err)
+	}
+	defer ov.Close()
+
+	sW := int(ov.Width())
+	sH := int(ov.Height())
+	log.Infof("Screen: %dx%d", sW, sH)
+
+	g := grid.New(cfg, sW, sH)
+	log.Infof("Grid: %s", g)
+
+	vmouse, err := mouse.NewWayland()
+	if err != nil {
+		log.Fatalf("Failed to create virtual mouse: %v", err)
+	}
+	defer vmouse.Close()
+
+	var debugPath string
+	if opts.SavDebug {
+		debugPath = filepath.Join(cfg.LogPath, "debug-overlay.png")
+	}
+	bgColor := config.ParseColor(cfg.BgColor)
+	highlightColor := config.ParseColor(cfg.HighlightColor)
+	renderOverlay(ov, g, bgColor, highlightColor, cfg.Opacity, debugPath)
+
+	log.Info("Ready. Type 1-9 to zoom, Enter to confirm, i/o to click, Esc to exit.")
+	for ev := range keyChan {
+		if !ev.IsPress {
+			continue
+		}
+
+		alias, _ := getAliasForCode(ev.Code)
+
+		if alias == "esc" {
+			log.Info("Escape pressed, exiting")
+			return
+		}
+
+		switch alias {
+		case "i":
+			ov.Hide()
+			time.Sleep(50 * time.Millisecond)
+			log.Infof("Left click at (%d, %d)", g.ClickX(), g.ClickY())
+			if err := vmouse.ClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
+				log.Errorf("Click failed: %v", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			log.Info("Done")
+			return
+		case "o":
+			ov.Hide()
+			time.Sleep(50 * time.Millisecond)
+			log.Infof("Right click at (%d, %d)", g.ClickX(), g.ClickY())
+			if err := vmouse.RightClickAt(int32(g.ClickX()), int32(g.ClickY())); err != nil {
+				log.Errorf("Right click failed: %v", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			log.Info("Done")
+			return
+		}
+
+		if g.HandleKey(ev) {
+			if g.State() == grid.StateReady {
+				if err := vmouse.MoveTo(int32(g.ClickX()), int32(g.ClickY())); err != nil {
+					log.Warnf("MoveTo failed: %v", err)
+				}
+			}
+			renderOverlay(ov, g, bgColor, highlightColor, cfg.Opacity, debugPath)
+		}
+	}
+}
+
+func renderOverlay(ov overlay.Window, g *grid.Grid, bgColor, highlightColor color.Color, opacity float64, debugPath string) {
 	img := g.Render(bgColor, nil, highlightColor, opacity)
 	if debugPath != "" {
 		if err := overlay.SaveDebugImage(img, debugPath); err != nil {
@@ -218,6 +302,55 @@ func renderOverlay(ov *overlay.Overlay, g *grid.Grid, bgColor, highlightColor co
 	if err := ov.Render(img); err != nil {
 		log.Warnf("Render failed: %v", err)
 	}
+}
+
+func runCheck(cfg *config.Config) {
+	if isWayland() {
+		ov, err := overlay.NewWayland(nil)
+		if err != nil {
+			log.Fatalf("Failed to create overlay: %v", err)
+		}
+		defer ov.Close()
+		sW := int(ov.Width())
+		sH := int(ov.Height())
+		g := grid.New(cfg, sW, sH)
+
+		bgColor := config.ParseColor(cfg.BgColor)
+		highlightColor := config.ParseColor(cfg.HighlightColor)
+		img := g.Render(bgColor, nil, highlightColor, cfg.Opacity)
+		if err := ov.Render(img); err != nil {
+			log.Warnf("Render failed: %v", err)
+		}
+
+		log.Info("=== CHECK MODE === (Wayland)")
+		log.Infof("Sleeping 10s from Ctrl+C to exit early")
+		time.Sleep(10 * time.Second)
+		return
+	}
+
+	ov, err := overlay.New()
+	if err != nil {
+		log.Fatalf("Failed to create overlay: %v", err)
+	}
+	defer ov.Close()
+
+	sW := int(ov.Width())
+	sH := int(ov.Height())
+	g := grid.New(cfg, sW, sH)
+	ov.SetOpacity(cfg.Opacity)
+
+	bgColor := config.ParseColor(cfg.BgColor)
+	highlightColor := config.ParseColor(cfg.HighlightColor)
+	img := g.Render(bgColor, nil, highlightColor, 1.0)
+	if err := ov.Render(img); err != nil {
+		log.Warnf("Render failed: %v", err)
+	}
+
+	wid := ov.Window()
+	log.Infof("=== CHECK MODE === Window ID: %d", wid)
+	log.Infof("Run: xprop -id %d", wid)
+	log.Infof("Sleeping 10s from Ctrl+C to exit early")
+	time.Sleep(10 * time.Second)
 }
 
 func handleX11Events(ov *overlay.Overlay, g *grid.Grid, bgColor, highlightColor color.Color, opacity float64, debugPath string) {
@@ -240,33 +373,6 @@ func handleX11Events(ov *overlay.Overlay, g *grid.Grid, bgColor, highlightColor 
 	}
 }
 
-func runCheck(cfg *config.Config) {
-	ov, err := overlay.New()
-	if err != nil {
-		log.Fatalf("Failed to create overlay: %v", err)
-	}
-	defer ov.Close()
-
-	sW := int(ov.Width())
-	sH := int(ov.Height())
-	g := grid.New(cfg, sW, sH)
-	ov.SetOpacity(cfg.Opacity)
-
-	bgColor := config.ParseColor(cfg.BgColor)
-	highlightColor := config.ParseColor(cfg.HighlightColor)
-	img := g.Render(bgColor, nil, highlightColor, 1.0)
-	if err := ov.Render(img); err != nil {
-		log.Warnf("Render failed: %v", err)
-	}
-
-	wid := ov.Window()
-	log.Infof("=== CHECK MODE === Window ID: %d", wid)
-	log.Infof("Run: xprop -id %d", wid)
-	log.Infof("Sleeping 10s — press Ctrl+C to exit early")
-	time.Sleep(10 * time.Second)
-}
-
-// getAliasForCode is a local alias lookup (duplicates keydefs for simplicity)
 func getAliasForCode(code uint16) (string, bool) {
 	aliases := map[uint16]string{
 		1: "esc", 14: "backspace", 28: "enter", 57: "space",
@@ -329,7 +435,6 @@ func printKeyboardDevices() {
 	}
 }
 
-// setupFileLogging creates a log file and configures multi-writer output
 func setupFileLogging(cfg *config.Config) *os.File {
 	logName := fmt.Sprintf("mouseless-grid_%s.log", time.Now().Format("2006-01-02_15-04-05"))
 	logPath := filepath.Join(cfg.LogPath, logName)
@@ -340,7 +445,6 @@ func setupFileLogging(cfg *config.Config) *os.File {
 		return nil
 	}
 
-	// stdout + file, both at configured level
 	multiWriter := io.MultiWriter(os.Stdout, f)
 	log.SetOutput(multiWriter)
 

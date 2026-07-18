@@ -24,6 +24,7 @@ type gridCell struct{ col, row int }
 type Grid struct {
 	screenW, screenH int
 	minCellPx        int
+	homeRow          bool
 	selections       []gridCell
 	regionX, regionY int
 	regionW, regionH int
@@ -36,10 +37,11 @@ func New(cfg *config.Config, screenW, screenH int) *Grid {
 		screenW:  screenW,
 		screenH:  screenH,
 		minCellPx: cfg.MinCellPx,
-		regionW:  screenW,
-		regionH:  screenH,
+		homeRow:   cfg.GridLayout == "home",
+		regionW:   screenW,
+		regionH:   screenH,
 	}
-	log.Infof("Grid: %dx%d minCellPx=%d", screenW, screenH, g.minCellPx)
+	log.Infof("Grid: %dx%d minCellPx=%d layout=%s", screenW, screenH, g.minCellPx, cfg.GridLayout)
 	return g
 }
 
@@ -63,21 +65,24 @@ func (g *Grid) HandleKey(ev keyboard.Event) bool {
 }
 
 func (g *Grid) handleZoomKey(alias string) bool {
-	// number keys 1-9
-	if n := parseDigit(alias); n >= 1 && n <= 9 {
+	n := parseDigit(alias)
+	if n == 0 && g.homeRow {
+		n = parseHomeDigit(alias)
+	}
+	if n >= 1 && n <= 9 {
 		col := (n - 1) % 3
 		row := (n - 1) / 3
 		g.selections = append(g.selections, gridCell{col, row})
 		g.recalculateRegion()
-		log.Debugf("Zoom to cell %d (%d,%d) region=(%d,%d %dx%d)",
-			n, col, row, g.regionX, g.regionY, g.regionW, g.regionH)
+		g.clickX = g.regionX + g.regionW/2
+		g.clickY = g.regionY + g.regionH/2
+		log.Debugf("Zoom to cell %d (%d,%d) region=(%d,%d %dx%d) click=(%d,%d)",
+			n, col, row, g.regionX, g.regionY, g.regionW, g.regionH, g.clickX, g.clickY)
 
 		cellW := g.regionW / 3
 		if cellW <= g.minCellPx {
 			g.state = StateReady
-			g.clickX = g.regionX + g.regionW/2
-			g.clickY = g.regionY + g.regionH/2
-			log.Debugf("Precision reached: cellW=%d, click=(%d,%d)", cellW, g.clickX, g.clickY)
+			log.Debugf("Precision reached: cellW=%d", cellW)
 		} else {
 			g.state = StateZoomed
 		}
@@ -165,19 +170,20 @@ func (g *Grid) RegionH() int     { return g.regionH }
 
 // --- rendering ---
 
-func (g *Grid) Render(bgColor, textColor, highlightColor color.Color, _ float64) *image.NRGBA {
+func (g *Grid) Render(bgColor, textColor, highlightColor color.Color, opacity float64) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, g.screenW, g.screenH))
 
-	bgRGBA := toNRGBA(bgColor, 1.0)
+	bgRGBA := toNRGBA(bgColor, opacity)
 	lineColor := toNRGBA(color.RGBA{255, 255, 255, 255}, 0.3)
 	labelColor := toNRGBA(color.RGBA{255, 255, 255, 255}, 1.0)
-	highlightBg := toNRGBA(highlightColor, 1.0)
+	highlightBg := toNRGBA(highlightColor, opacity)
 
 	// fill entire screen with bg
 	FillRect(img, 0, 0, g.screenW, g.screenH, bgRGBA)
 
 	cellW := g.regionW / 3
 	cellH := g.regionH / 3
+	homeLabels := []string{"A", "S", "D", "F", "G", "H", "J", "K", "L"}
 
 	for row := 0; row < 3; row++ {
 		for col := 0; col < 3; col++ {
@@ -212,6 +218,9 @@ func (g *Grid) Render(bgColor, textColor, highlightColor color.Color, _ float64)
 
 			// label
 			label := fmt.Sprintf("%d", n)
+			if g.homeRow {
+				label = homeLabels[n-1]
+			}
 			scale := 2
 			if cellW > 80 {
 				scale = 4
@@ -226,6 +235,30 @@ func (g *Grid) Render(bgColor, textColor, highlightColor color.Color, _ float64)
 }
 
 // --- helpers ---
+
+func parseHomeDigit(alias string) int {
+	switch alias {
+	case "a":
+		return 1
+	case "s":
+		return 2
+	case "d":
+		return 3
+	case "f":
+		return 4
+	case "g":
+		return 5
+	case "h":
+		return 6
+	case "j":
+		return 7
+	case "k":
+		return 8
+	case "l":
+		return 9
+	}
+	return 0
+}
 
 func parseDigit(alias string) int {
 	if len(alias) == 2 && alias[0] == 'k' && alias[1] >= '1' && alias[1] <= '9' {

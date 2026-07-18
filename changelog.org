@@ -2,6 +2,33 @@
 
   All notable changes to this project are documented here.
 
+** [0.2.0] - 2026-07-18
+
+  Wayland dual-backend, click keys, grid layouts, input refactor.
+
+  Added:
+  - [X] Wayland support: wlr-layer-shell overlay + wlr-virtual-pointer mouse
+  - [X] Input via wl_keyboard protocol on Wayland (no evdev grab)
+  - [X] /i/ left-click, /o/ right-click (replaces LCtrl/LAlt)
+  - [X] Clicks work from any zoom level (no Enter-first requirement)
+  - [X] Grid layout flag: --grid-layout num (1-9) or home (asdfghjkl)
+  - [X] Uppercase glyphs A-Z in bitmap font
+  - [X] Per-keypress INFO logging for debugging
+  - [X] Device.Close() for proper keyboard cleanup on exit
+
+  Fixed:
+  - [X] Wayland "broken pipe" crash — dispatch goroutine + AckConfigure
+  - [X] Wayland overlay transparency — opacity passed to Render
+  - [X] Wayland surface sizing — all-4 anchors + exclusive zone -1, ignore configure size
+  - [X] Enter leak on exit — replaced evdev grab with wl_keyboard on Wayland
+  - [X] K and D glyphs in bitmap font
+  - [X] color.NRGBA.RGBA() premultiplied value issue in config tests
+
+  Changed:
+  - [X] Click keys: i/o only, removed leftctrl/leftalt
+  - [X] clickX/clickY set on every zoom step (not just at precision)
+  - [X] Keyboard log: presses at INFO, releases at DEBUG
+
 ** [0.1.0] - 2026-07-16
 
   Initial release.
@@ -24,9 +51,8 @@
   - [X] Structured logging to file (~/magnus/mouseless-grid/logs/)
   - [X] Expose event handling for re-render after window damage
 
-** Unreleased
+** Future
 
-  - [ ] Wayland support (wlr-layer-shell protocol)
   - [ ] Daemon mode with global hotkey activation
   - [ ] Drag and drop support
   - [ ] Sub-grid nudge for extra precision
